@@ -249,7 +249,7 @@ public sealed unsafe partial class DacDbiImpl : IDacDbiInterface
                 if (methodTable != TargetPointer.Null)
                 {
                     Contracts.IRuntimeTypeSystem rts = _target.Contracts.RuntimeTypeSystem;
-                    Contracts.ITypeHandle typeHandle = rts.GetTypeHandle(methodTable);
+                    ITypeHandle typeHandle = rts.GetTypeHandle(methodTable);
                     TargetPointer typeDefModulePtr = rts.GetModule(typeHandle);
                     Contracts.ModuleHandle typeDefModule = loader.GetModuleHandleFromModulePtr(typeDefModulePtr);
                     targetAssembly = loader.GetAssembly(typeDefModule);
@@ -2237,7 +2237,7 @@ public sealed unsafe partial class DacDbiImpl : IDacDbiInterface
             if (arch == RuntimeInfoArchitecture.Arm || arch == RuntimeInfoArchitecture.Wasm)
             {
                 Contracts.IRuntimeTypeSystem rts = _target.Contracts.RuntimeTypeSystem;
-                Contracts.ITypeHandle th = rts.GetTypeHandle(new TargetPointer(thExact));
+                ITypeHandle th = rts.GetTypeHandle(new TargetPointer(thExact));
                 *pResult = rts.RequiresAlign8(th) ? Interop.BOOL.TRUE : Interop.BOOL.FALSE;
             }
             else
@@ -2395,7 +2395,7 @@ public sealed unsafe partial class DacDbiImpl : IDacDbiInterface
         try
         {
             Contracts.IRuntimeTypeSystem rts = _target.Contracts.RuntimeTypeSystem;
-            Contracts.ITypeHandle th = rts.GetTypeHandle(new TargetPointer(vmTypeHandle));
+            ITypeHandle th = rts.GetTypeHandle(new TargetPointer(vmTypeHandle));
             *pResult = rts.IsValueType(th) ? Interop.BOOL.TRUE : Interop.BOOL.FALSE;
         }
         catch (System.Exception ex)
@@ -3472,7 +3472,7 @@ public sealed unsafe partial class DacDbiImpl : IDacDbiInterface
         try
         {
             Contracts.IRuntimeTypeSystem rts = _target.Contracts.RuntimeTypeSystem;
-            Contracts.ITypeHandle typeHandle = rts.GetPrimitiveType((CorElementType)simpleType);
+            ITypeHandle typeHandle = rts.GetPrimitiveType((CorElementType)simpleType);
 
             if (typeHandle.IsNull)
             {
@@ -5936,7 +5936,7 @@ public sealed unsafe partial class DacDbiImpl : IDacDbiInterface
 
     // Fills a DebuggerIPCE_BasicTypeData for a type handle — used for array element types
     // and ptr/byref referent types. Exposed as internal so tests can build the ArgInfoList
-    // needed to round-trip a ITypeHandle through GetExactTypeHandle.
+    // needed to round-trip an ITypeHandle through GetExactTypeHandle.
     internal void FillBasicTypeInfo(IRuntimeTypeSystem rts, ITypeHandle typeHandle, out DebuggerIPCE_BasicTypeData typeInfo)
     {
         typeInfo = default;
