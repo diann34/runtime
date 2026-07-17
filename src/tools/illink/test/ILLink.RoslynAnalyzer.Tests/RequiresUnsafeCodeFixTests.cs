@@ -9,15 +9,14 @@ using ILLink.Shared;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CodeFixes;
+using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Testing;
 using Microsoft.CodeAnalysis.Text;
 using Xunit;
+using RoslynCodeFixProvider = Microsoft.CodeAnalysis.CodeFixes.CodeFixProvider;
 using VerifyCS = ILLink.RoslynAnalyzer.Tests.CSharpCodeFixVerifier<
     ILLink.RoslynAnalyzer.DynamicallyAccessedMembersAnalyzer,
     ILLink.CodeFix.RequiresUnsafeCodeFixProvider>;
-using VerifyUnsafeModifierMigrationCS = ILLink.RoslynAnalyzer.Tests.CSharpCodeFixVerifier<
-    ILLink.RoslynAnalyzer.UnsafeMigrationAnalyzer,
-    ILLink.CodeFix.UnsafeModifierMigrationCodeFixProvider>;
 
 namespace ILLink.RoslynAnalyzer.Tests
 {
@@ -60,54 +59,79 @@ namespace ILLink.RoslynAnalyzer.Tests
             return test.RunAsync();
         }
 
-        static void AddUnsafeMigrationConfig(VerifyUnsafeModifierMigrationCS.Test test)
-        {
-            test.SolutionTransforms.Add(SetOptions);
-            var config = ("/.editorconfig", SourceText.From(@$"
-is_global = true
-build_property.{MSBuildPropertyOptionNames.EnableUnsafeMigration} = true"));
-            test.TestState.AnalyzerConfigFiles.Add(config);
-        }
-
-        static Task VerifyUnsafeModifierMigrationCodeFix(
+        static Task VerifyUnsafeMigrationCodeFix<TAnalyzer, TCodeFix>(
             string source,
             string fixedSource,
             DiagnosticResult[] baselineExpected,
             DiagnosticResult[] fixedExpected,
-            int? numberOfIterations = null)
+            CompilerDiagnostics compilerDiagnostics = CompilerDiagnostics.Errors)
+            where TAnalyzer : DiagnosticAnalyzer, new()
+            where TCodeFix : RoslynCodeFixProvider, new()
         {
-            var test = new VerifyUnsafeModifierMigrationCS.Test
+            var test = new CSharpCodeFixVerifier<TAnalyzer, TCodeFix>.Test
             {
                 TestCode = source,
-                FixedCode = fixedSource
+                FixedCode = fixedSource,
+                CompilerDiagnostics = compilerDiagnostics
             };
             test.ExpectedDiagnostics.AddRange(baselineExpected);
-            AddUnsafeMigrationConfig(test);
-            if (numberOfIterations != null)
+            test.SolutionTransforms.Add(static (solution, projectId) =>
             {
-                test.NumberOfIncrementalIterations = numberOfIterations;
-                test.NumberOfFixAllIterations = numberOfIterations;
-            }
+                solution = SetOptions(solution, projectId);
+                var project = solution.GetProject(projectId)!;
+                var compilationOptions = (CSharpCompilationOptions)project.CompilationOptions!;
+                return solution.WithProjectCompilationOptions(
+                    projectId,
+                    compilationOptions
+                        .WithWarningLevel(9999)
+                        .WithSpecificDiagnosticOptions(
+                            compilationOptions.SpecificDiagnosticOptions
+                                .SetItem("CS9377", ReportDiagnostic.Warn)
+                                .SetItem("CS1591", ReportDiagnostic.Suppress)
+                                .SetItem("CS8321", ReportDiagnostic.Suppress)));
+            });
+            var config = ("/.editorconfig", SourceText.From(@$"
+is_global = true
+build_property.{MSBuildPropertyOptionNames.EnableUnsafeMigration} = true"));
+            test.TestState.AnalyzerConfigFiles.Add(config);
+            test.FixedState.AnalyzerConfigFiles.Add(config);
             test.FixedState.ExpectedDiagnostics.AddRange(fixedExpected);
             return test.RunAsync();
         }
 
-        static DiagnosticResult UnsafeModifierMigrationDiagnostic()
-            => VerifyUnsafeModifierMigrationCS.Diagnostic(DiagnosticDescriptors.GetDiagnosticDescriptor(
-                DiagnosticId.UnsafeModifierMigration,
-                diagnosticSeverity: DiagnosticSeverity.Info));
+        static DiagnosticResult MissingSafetyDocumentationDiagnostic()
+            => CSharpCodeFixVerifier<
+                UnsafeMemberMissingSafetyDocumentationAnalyzer,
+                RemoveUndocumentedUnsafeCodeFixProvider>.Diagnostic(
+                    DiagnosticDescriptors.GetDiagnosticDescriptor(
+                        DiagnosticId.UnsafeMemberMissingSafetyDocumentation,
+                        diagnosticSeverity: DiagnosticSeverity.Info));
+
+        static DiagnosticResult PointerSignatureRequiresUnsafeDiagnostic()
+            => CSharpCodeFixVerifier<
+                PointerSignatureRequiresUnsafeAnalyzer,
+                AddUnsafeToPointerSignatureCodeFixProvider>.Diagnostic(
+                    DiagnosticDescriptors.GetDiagnosticDescriptor(
+                        DiagnosticId.PointerSignatureRequiresUnsafe,
+                        diagnosticSeverity: DiagnosticSeverity.Info));
 
         [Fact]
-        public void UnsafeMigrationDiagnostic_HasUnsafeCategoryWithoutHelpLink()
+        public void UnsafeMigrationDiagnostics_HaveUnsafeCategoryWithoutHelpLinks()
         {
-            DiagnosticDescriptor descriptor = DiagnosticDescriptors.GetDiagnosticDescriptor(
-                DiagnosticId.UnsafeModifierMigration);
-            Assert.Equal("Unsafe", descriptor.Category);
-            Assert.Empty(descriptor.HelpLinkUri);
+            foreach (DiagnosticId diagnosticId in new[]
+            {
+                DiagnosticId.UnsafeMemberMissingSafetyDocumentation,
+                DiagnosticId.PointerSignatureRequiresUnsafe
+            })
+            {
+                DiagnosticDescriptor descriptor = DiagnosticDescriptors.GetDiagnosticDescriptor(diagnosticId);
+                Assert.Equal("Unsafe", descriptor.Category);
+                Assert.Empty(descriptor.HelpLinkUri);
+            }
         }
 
         [Fact]
-        public async Task UnsafeMigrationCodeFix_IsNotRegisteredWhenMigrationDisabled()
+        public async Task UnsafeMigrationCodeFixes_AreNotRegisteredWhenMigrationDisabled()
         {
             using var workspace = new AdhocWorkspace();
             ProjectId projectId = ProjectId.CreateNewId();
@@ -127,26 +151,36 @@ build_property.{MSBuildPropertyOptionNames.EnableUnsafeMigration} = true"));
             Document document = workspace.CurrentSolution.GetDocument(documentId)!;
             SyntaxTree syntaxTree = (await document.GetSyntaxTreeAsync())!;
 
-            string diagnosticId = DiagnosticId.UnsafeModifierMigration.AsString();
-            var descriptor = new DiagnosticDescriptor(
-                diagnosticId,
-                diagnosticId,
-                diagnosticId,
-                "Test",
-                DiagnosticSeverity.Warning,
-                isEnabledByDefault: true);
-            Diagnostic diagnostic = Diagnostic.Create(
-                descriptor,
-                Location.Create(syntaxTree, new TextSpan(0, 1)));
-            bool registered = false;
-            var context = new CodeFixContext(
-                document,
-                diagnostic,
-                (_, _) => registered = true,
-                default);
+            foreach ((RoslynCodeFixProvider provider, string diagnosticId) in new[]
+            {
+                ((RoslynCodeFixProvider)new RemoveInvalidUnsafeCodeFixProvider(), "CS9377"),
+                (new AddUnsafeToExternCodeFixProvider(), "CS9389"),
+                (new RemoveUndocumentedUnsafeCodeFixProvider(),
+                    DiagnosticId.UnsafeMemberMissingSafetyDocumentation.AsString()),
+                (new AddUnsafeToPointerSignatureCodeFixProvider(),
+                    DiagnosticId.PointerSignatureRequiresUnsafe.AsString())
+            })
+            {
+                var descriptor = new DiagnosticDescriptor(
+                    diagnosticId,
+                    diagnosticId,
+                    diagnosticId,
+                    "Test",
+                    DiagnosticSeverity.Warning,
+                    isEnabledByDefault: true);
+                Diagnostic diagnostic = Diagnostic.Create(
+                    descriptor,
+                    Location.Create(syntaxTree, new TextSpan(0, 1)));
+                bool registered = false;
+                var context = new CodeFixContext(
+                    document,
+                    diagnostic,
+                    (_, _) => registered = true,
+                    default);
 
-            await new UnsafeModifierMigrationCodeFixProvider().RegisterCodeFixesAsync(context);
-            Assert.False(registered);
+                await provider.RegisterCodeFixesAsync(context);
+                Assert.False(registered);
+            }
         }
 
         [Fact]
@@ -1765,249 +1799,213 @@ build_property.{MSBuildPropertyOptionNames.EnableUnsafeMigration} = true"));
         }
 
         [Fact]
-        public async Task UnsafeModifierMigration_RemovesUnsafeFromTypeDeclarations()
+        public async Task RemoveInvalidUnsafeCodeFix_RemovesCompilerReportedModifiers()
         {
             var source = """
-                {|#0:unsafe|} class DangerousClass
+                unsafe class {|#0:Program|}
                 {
                 }
 
-                unsafe struct DangerousStruct
+                unsafe enum {|#1:E|}
                 {
-                }
-
-                unsafe interface IDangerous
-                {
-                }
-
-                unsafe record DangerousRecord;
-
-                unsafe record struct DangerousRecordStruct;
-
-                public unsafe delegate void DangerousDelegate();
-
-                public class WithStaticConstructor
-                {
-                    static unsafe WithStaticConstructor()
-                    {
-                    }
-                }
-
-                public class WithDestructor
-                {
-                    unsafe ~WithDestructor()
-                    {
-                    }
+                    A
                 }
                 """;
 
             var fixedSource = """
-                class DangerousClass
+                class Program
                 {
                 }
 
-                struct DangerousStruct
+                enum E
                 {
-                }
-
-                interface IDangerous
-                {
-                }
-
-                record DangerousRecord;
-
-                record struct DangerousRecordStruct;
-
-                public delegate void DangerousDelegate();
-
-                public class WithStaticConstructor
-                {
-                    static WithStaticConstructor()
-                    {
-                    }
-                }
-
-                public class WithDestructor
-                {
-                    ~WithDestructor()
-                    {
-                    }
+                    A
                 }
                 """;
 
-            await VerifyUnsafeModifierMigrationCodeFix(
+            await VerifyUnsafeMigrationCodeFix<
+                UnsafeMemberMissingSafetyDocumentationAnalyzer,
+                RemoveInvalidUnsafeCodeFixProvider>(
                 source,
                 fixedSource,
                 baselineExpected: [
-                    UnsafeModifierMigrationDiagnostic().WithLocation(0)
+                    DiagnosticResult.CompilerWarning("CS9377").WithLocation(0),
+                    DiagnosticResult.CompilerError("CS0106").WithLocation(1)
+                ],
+                fixedExpected: [],
+                compilerDiagnostics: CompilerDiagnostics.Warnings);
+        }
+
+        [Fact]
+        public async Task AddUnsafeToExternCodeFix_AddsUnsafeByDefault()
+        {
+            var source = """
+                using System.Runtime.InteropServices;
+
+                class Program
+                {
+                    [DllImport("user32.dll")]
+                    [return: MarshalAs(UnmanagedType.Bool)]
+                    static {|#0:extern|} bool MessageBeep(int uType);
+                }
+                """;
+
+            var fixedSource = """
+                using System.Runtime.InteropServices;
+
+                class Program
+                {
+                    [DllImport("user32.dll")]
+                    [return: MarshalAs(UnmanagedType.Bool)]
+                    static unsafe extern bool MessageBeep(int uType);
+                }
+                """;
+
+            await VerifyUnsafeMigrationCodeFix<
+                UnsafeMemberMissingSafetyDocumentationAnalyzer,
+                AddUnsafeToExternCodeFixProvider>(
+                source,
+                fixedSource,
+                baselineExpected: [
+                    DiagnosticResult.CompilerError("CS9389").WithLocation(0)
                 ],
                 fixedExpected: []);
         }
 
         [Fact]
-        public async Task UnsafeModifierMigration_RemovesLegacyMemberUnsafeAndPreservesDocumentedOrPointerSignatures()
+        public async Task RemoveUndocumentedUnsafeCodeFix_RemovesOnlyUndocumentedNonPointerMembers()
         {
             var source = """
-                public class C
+                using System;
+
+                class C
                 {
-                    public {|#0:unsafe|} void RemovableMethod() { }
+                    public {|#0:unsafe|} void Method() { }
 
                     public void Host()
                     {
-                        unsafe void RemovableLocal()
-                        {
-                        }
+                        {|#1:unsafe|} void Local() { }
                     }
 
-                    public unsafe int RemovableProperty => 0;
-
-                    public int RemovableAccessors
+                    public {|#2:unsafe|} int Property
                     {
-                        unsafe get => 0;
-                        unsafe set { }
+                        {|#3:unsafe|} get => 0;
+                        set { }
                     }
 
-                    public unsafe event System.Action RemovableEvent
+                    public {|#4:unsafe|} event Action Event
                     {
                         add { }
                         remove { }
                     }
 
-                    // <safety>This is not XML documentation.</safety>
-                    public unsafe void CommentOnlySafetyTag() { }
+                    /// <safety>The caller must validate the state.</safety>
+                    public unsafe void Documented() { }
 
-                    /// <safety>Documented.</safety>
-                    public unsafe void DocumentedMethod() { }
+                    public unsafe void* Pointer(void* value) => value;
 
-                    public unsafe void PointerArray(delegate* unmanaged<int>[] callbacks) { }
-
-                    public void* AddedPointerMethod(void* value) => value;
-
-                    /// <safety>The pointer is not dereferenced.</safety>
-                    public void* DocumentedPointerMethod(void* value) => value;
-
-                    public delegate* unmanaged<int> AddedFunctionPointerProperty => default;
-
-                    public delegate* unmanaged<int> PointerAccessors
-                    {
-                        unsafe get => default;
-                        set { }
-                    }
+                    public static unsafe extern int Extern();
                 }
                 """;
 
             var fixedSource = """
-                public class C
+                using System;
+
+                class C
                 {
-                    public void RemovableMethod() { }
+                    public void Method() { }
 
                     public void Host()
                     {
-                        void RemovableLocal()
-                        {
-                        }
+                        void Local() { }
                     }
 
-                    public int RemovableProperty => 0;
-
-                    public int RemovableAccessors
+                    public int Property
                     {
                         get => 0;
                         set { }
                     }
 
-                    public event System.Action RemovableEvent
+                    public event Action Event
                     {
                         add { }
                         remove { }
                     }
 
-                    // <safety>This is not XML documentation.</safety>
-                    public void CommentOnlySafetyTag() { }
+                    /// <safety>The caller must validate the state.</safety>
+                    public unsafe void Documented() { }
 
-                    /// <safety>Documented.</safety>
-                    public unsafe void DocumentedMethod() { }
+                    public unsafe void* Pointer(void* value) => value;
 
-                    public unsafe void PointerArray(delegate* unmanaged<int>[] callbacks) { }
-
-                    public unsafe void* AddedPointerMethod(void* value) => value;
-
-                    /// <safety>The pointer is not dereferenced.</safety>
-                    public void* DocumentedPointerMethod(void* value) => value;
-
-                    public unsafe delegate* unmanaged<int> AddedFunctionPointerProperty => default;
-
-                    public unsafe delegate* unmanaged<int> PointerAccessors
-                    {
-                        get => default;
-                        set { }
-                    }
+                    public static unsafe extern int Extern();
                 }
                 """;
 
-            await VerifyUnsafeModifierMigrationCodeFix(
+            await VerifyUnsafeMigrationCodeFix<
+                UnsafeMemberMissingSafetyDocumentationAnalyzer,
+                RemoveUndocumentedUnsafeCodeFixProvider>(
                 source,
                 fixedSource,
                 baselineExpected: [
-                    UnsafeModifierMigrationDiagnostic().WithLocation(0)
+                    MissingSafetyDocumentationDiagnostic().WithLocation(0),
+                    MissingSafetyDocumentationDiagnostic().WithLocation(1),
+                    MissingSafetyDocumentationDiagnostic().WithLocation(2),
+                    MissingSafetyDocumentationDiagnostic().WithLocation(3),
+                    MissingSafetyDocumentationDiagnostic().WithLocation(4)
                 ],
                 fixedExpected: []);
         }
 
         [Fact]
-        public async Task UnsafeModifierMigration_AddsUnsafeToInteropUnlessMarkedSafe()
+        public async Task AddUnsafeToPointerSignatureCodeFix_AddsMissingModifiers()
         {
             var source = """
-                using System.Runtime.InteropServices;
-
-                public static partial class Native
+                class C
                 {
-                    /// <safety>The native entry point has been audited.</safety>
-                    {|#0:public|} static extern int PInvoke();
+                    public void* {|#0:Method|}(void* value) => value;
 
-                    [LibraryImport("Native")]
-                    static partial void LibraryImport();
+                    /// <safety>The pointer is not dereferenced.</safety>
+                    public void* Documented(void* value) => value;
 
-                    public static safe extern int SafeExtern();
+                    public delegate* unmanaged<int> {|#1:Property|} => default;
 
-                    [LibraryImport("Native")]
-                    static safe partial void SafeLibraryImport();
-
-                    public static unsafe extern int UnsafeExtern();
+                    public delegate* unmanaged<int> Mixed
+                    {
+                        unsafe get => default;
+                        {|#2:set|} { }
+                    }
                 }
                 """;
 
             var fixedSource = """
-                using System.Runtime.InteropServices;
-
-                public static partial class Native
+                class C
                 {
-                    /// <safety>The native entry point has been audited.</safety>
-                    public static unsafe extern int PInvoke();
+                    public unsafe void* Method(void* value) => value;
 
-                    [LibraryImport("Native")]
-                    static unsafe partial void LibraryImport();
+                    /// <safety>The pointer is not dereferenced.</safety>
+                    public void* Documented(void* value) => value;
 
-                    public static safe extern int SafeExtern();
+                    public unsafe delegate* unmanaged<int> Property => default;
 
-                    [LibraryImport("Native")]
-                    static safe partial void SafeLibraryImport();
-
-                    public static unsafe extern int UnsafeExtern();
+                    public delegate* unmanaged<int> Mixed
+                    {
+                        unsafe get => default;
+                        unsafe set { }
+                    }
                 }
                 """;
 
-            await VerifyUnsafeModifierMigrationCodeFix(
+            await VerifyUnsafeMigrationCodeFix<
+                PointerSignatureRequiresUnsafeAnalyzer,
+                AddUnsafeToPointerSignatureCodeFixProvider>(
                 source,
                 fixedSource,
                 baselineExpected: [
-                    UnsafeModifierMigrationDiagnostic().WithLocation(0),
-                    DiagnosticResult.CompilerError("CS9389").WithSpan(6, 19, 6, 25),
-                    DiagnosticResult.CompilerError("CS9388").WithSpan(14, 12, 14, 16)
+                    PointerSignatureRequiresUnsafeDiagnostic().WithLocation(0),
+                    PointerSignatureRequiresUnsafeDiagnostic().WithLocation(1),
+                    PointerSignatureRequiresUnsafeDiagnostic().WithLocation(2)
                 ],
-                fixedExpected: [
-                    DiagnosticResult.CompilerError("CS9388").WithSpan(14, 12, 14, 16)
-                ]);
+                fixedExpected: []);
         }
     }
 }

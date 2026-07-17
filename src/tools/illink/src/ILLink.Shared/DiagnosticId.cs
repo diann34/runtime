@@ -222,7 +222,8 @@ namespace ILLink.Shared
 
 #if DEBUG
         // Unsafe evolution migration diagnostic ids.
-        UnsafeModifierMigration = 5005,
+        UnsafeMemberMissingSafetyDocumentation = 5005,
+        PointerSignatureRequiresUnsafe = 5006,
 #endif
     }
 
@@ -257,7 +258,8 @@ namespace ILLink.Shared
                 > 2000 and < 3000 => DiagnosticCategory.Trimming,
                 >= 3000 and < 3050 => DiagnosticCategory.SingleFile,
 #if DEBUG
-                (int)DiagnosticId.UnsafeModifierMigration => DiagnosticCategory.Unsafe,
+                (int)DiagnosticId.UnsafeMemberMissingSafetyDocumentation or
+                    (int)DiagnosticId.PointerSignatureRequiresUnsafe => DiagnosticCategory.Unsafe,
 #endif
                 >= 3050 and <= 6000 => DiagnosticCategory.AOT,
                 _ => throw new ArgumentException($"The provided diagnostic id '{diagnosticId}' does not fall into the range of supported warning codes 2001 to 6000 (inclusive).")

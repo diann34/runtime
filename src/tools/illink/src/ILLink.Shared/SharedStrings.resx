@@ -1269,10 +1269,16 @@
   <data name="DataflowAnalysisDidNotConvergeMessage" xml:space="preserve">
     <value>Trim dataflow analysis of member '{0}' took too long to complete. Trim safety cannot be guaranteed.</value>
   </data>
-  <data name="UnsafeModifierMigrationTitle" xml:space="preserve">
-    <value>Unsafe modifiers require migration</value>
+  <data name="UnsafeMemberMissingSafetyDocumentationTitle" xml:space="preserve">
+    <value>Unsafe member is missing safety documentation</value>
   </data>
-  <data name="UnsafeModifierMigrationMessage" xml:space="preserve">
-    <value>This file contains declarations whose unsafe modifiers should be updated for the new memory safety rules.</value>
+  <data name="UnsafeMemberMissingSafetyDocumentationMessage" xml:space="preserve">
+    <value>Remove the 'unsafe' modifier or document the caller's safety requirements with a &lt;safety&gt; XML comment.</value>
+  </data>
+  <data name="PointerSignatureRequiresUnsafeTitle" xml:space="preserve">
+    <value>Pointer signature requires an unsafe modifier</value>
+  </data>
+  <data name="PointerSignatureRequiresUnsafeMessage" xml:space="preserve">
+    <value>Add the 'unsafe' modifier or document why the pointer signature is safe with a &lt;safety&gt; XML comment.</value>
   </data>
 </root>
