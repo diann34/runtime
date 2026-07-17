@@ -4,7 +4,6 @@
     <CompilerVisibleProperty Include="EnableSingleFileAnalyzer" />
     <CompilerVisibleProperty Include="EnableTrimAnalyzer" />
     <CompilerVisibleProperty Include="EnableUnsafeMigration" />
-    <CompilerVisibleProperty Include="SkipLocalsInit" />
     <CompilerVisibleProperty Include="IncludeAllContentForSelfExtract" />
     <CompilerVisibleProperty Include="VerifyReferenceTrimCompatibility" />
     <CompilerVisibleProperty Include="VerifyReferenceAotCompatibility" />

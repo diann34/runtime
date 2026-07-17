@@ -12,16 +12,12 @@ using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.Testing;
 using Microsoft.CodeAnalysis.Text;
 using Xunit;
-using RoslynCodeFixProvider = Microsoft.CodeAnalysis.CodeFixes.CodeFixProvider;
 using VerifyCS = ILLink.RoslynAnalyzer.Tests.CSharpCodeFixVerifier<
     ILLink.RoslynAnalyzer.DynamicallyAccessedMembersAnalyzer,
     ILLink.CodeFix.RequiresUnsafeCodeFixProvider>;
 using VerifyUnsafeModifierMigrationCS = ILLink.RoslynAnalyzer.Tests.CSharpCodeFixVerifier<
     ILLink.RoslynAnalyzer.UnsafeMigrationAnalyzer,
     ILLink.CodeFix.UnsafeModifierMigrationCodeFixProvider>;
-using VerifyUnsafeUsageMigrationCS = ILLink.RoslynAnalyzer.Tests.CSharpCodeFixVerifier<
-    ILLink.RoslynAnalyzer.UnsafeMigrationAnalyzer,
-    ILLink.CodeFix.UnsafeUsageMigrationCodeFixProvider>;
 
 namespace ILLink.RoslynAnalyzer.Tests
 {
@@ -73,15 +69,6 @@ build_property.{MSBuildPropertyOptionNames.EnableUnsafeMigration} = true"));
             test.TestState.AnalyzerConfigFiles.Add(config);
         }
 
-        static void AddUnsafeMigrationConfig(VerifyUnsafeUsageMigrationCS.Test test)
-        {
-            test.SolutionTransforms.Add(SetOptions);
-            var config = ("/.editorconfig", SourceText.From(@$"
-is_global = true
-build_property.{MSBuildPropertyOptionNames.EnableUnsafeMigration} = true"));
-            test.TestState.AnalyzerConfigFiles.Add(config);
-        }
-
         static Task VerifyUnsafeModifierMigrationCodeFix(
             string source,
             string fixedSource,
@@ -105,56 +92,22 @@ build_property.{MSBuildPropertyOptionNames.EnableUnsafeMigration} = true"));
             return test.RunAsync();
         }
 
-        static Task VerifyUnsafeUsageMigrationCodeFix(
-            string source,
-            string fixedSource,
-            DiagnosticResult[] baselineExpected,
-            DiagnosticResult[] fixedExpected,
-            int? numberOfIterations = null)
-        {
-            var test = new VerifyUnsafeUsageMigrationCS.Test
-            {
-                TestCode = source,
-                FixedCode = fixedSource
-            };
-            test.ExpectedDiagnostics.AddRange(baselineExpected);
-            AddUnsafeMigrationConfig(test);
-            if (numberOfIterations != null)
-            {
-                test.NumberOfIncrementalIterations = numberOfIterations;
-                test.NumberOfFixAllIterations = numberOfIterations;
-            }
-            test.FixedState.ExpectedDiagnostics.AddRange(fixedExpected);
-            return test.RunAsync();
-        }
-
         static DiagnosticResult UnsafeModifierMigrationDiagnostic()
             => VerifyUnsafeModifierMigrationCS.Diagnostic(DiagnosticDescriptors.GetDiagnosticDescriptor(
                 DiagnosticId.UnsafeModifierMigration,
                 diagnosticSeverity: DiagnosticSeverity.Info));
 
-        static DiagnosticResult UnsafeUsageMigrationDiagnostic()
-            => VerifyUnsafeUsageMigrationCS.Diagnostic(DiagnosticDescriptors.GetDiagnosticDescriptor(
-                DiagnosticId.UnsafeUsageMigration,
-                diagnosticSeverity: DiagnosticSeverity.Info));
-
         [Fact]
-        public void UnsafeMigrationDiagnostics_HaveUnsafeCategoryWithoutHelpLinks()
+        public void UnsafeMigrationDiagnostic_HasUnsafeCategoryWithoutHelpLink()
         {
-            foreach (DiagnosticId diagnosticId in new[]
-            {
-                DiagnosticId.UnsafeModifierMigration,
-                DiagnosticId.UnsafeUsageMigration
-            })
-            {
-                DiagnosticDescriptor descriptor = DiagnosticDescriptors.GetDiagnosticDescriptor(diagnosticId);
-                Assert.Equal("Unsafe", descriptor.Category);
-                Assert.Empty(descriptor.HelpLinkUri);
-            }
+            DiagnosticDescriptor descriptor = DiagnosticDescriptors.GetDiagnosticDescriptor(
+                DiagnosticId.UnsafeModifierMigration);
+            Assert.Equal("Unsafe", descriptor.Category);
+            Assert.Empty(descriptor.HelpLinkUri);
         }
 
         [Fact]
-        public async Task UnsafeMigrationCodeFixes_AreNotRegisteredWhenMigrationDisabled()
+        public async Task UnsafeMigrationCodeFix_IsNotRegisteredWhenMigrationDisabled()
         {
             using var workspace = new AdhocWorkspace();
             ProjectId projectId = ProjectId.CreateNewId();
@@ -174,32 +127,26 @@ build_property.{MSBuildPropertyOptionNames.EnableUnsafeMigration} = true"));
             Document document = workspace.CurrentSolution.GetDocument(documentId)!;
             SyntaxTree syntaxTree = (await document.GetSyntaxTreeAsync())!;
 
-            foreach ((RoslynCodeFixProvider provider, string diagnosticId) in new[]
-            {
-                ((RoslynCodeFixProvider)new UnsafeModifierMigrationCodeFixProvider(), DiagnosticId.UnsafeModifierMigration.AsString()),
-                (new UnsafeUsageMigrationCodeFixProvider(), RequiresUnsafeCodeFixProvider.UnsafeMemberOperationDiagnosticId)
-            })
-            {
-                var descriptor = new DiagnosticDescriptor(
-                    diagnosticId,
-                    diagnosticId,
-                    diagnosticId,
-                    "Test",
-                    DiagnosticSeverity.Warning,
-                    isEnabledByDefault: true);
-                Diagnostic diagnostic = Diagnostic.Create(
-                    descriptor,
-                    Location.Create(syntaxTree, new TextSpan(0, 1)));
-                bool registered = false;
-                var context = new CodeFixContext(
-                    document,
-                    diagnostic,
-                    (_, _) => registered = true,
-                    default);
+            string diagnosticId = DiagnosticId.UnsafeModifierMigration.AsString();
+            var descriptor = new DiagnosticDescriptor(
+                diagnosticId,
+                diagnosticId,
+                diagnosticId,
+                "Test",
+                DiagnosticSeverity.Warning,
+                isEnabledByDefault: true);
+            Diagnostic diagnostic = Diagnostic.Create(
+                descriptor,
+                Location.Create(syntaxTree, new TextSpan(0, 1)));
+            bool registered = false;
+            var context = new CodeFixContext(
+                document,
+                diagnostic,
+                (_, _) => registered = true,
+                default);
 
-                await provider.RegisterCodeFixesAsync(context);
-                Assert.False(registered);
-            }
+            await new UnsafeModifierMigrationCodeFixProvider().RegisterCodeFixesAsync(context);
+            Assert.False(registered);
         }
 
         [Fact]
@@ -1914,6 +1861,12 @@ build_property.{MSBuildPropertyOptionNames.EnableUnsafeMigration} = true"));
 
                     public unsafe int RemovableProperty => 0;
 
+                    public int RemovableAccessors
+                    {
+                        unsafe get => 0;
+                        unsafe set { }
+                    }
+
                     public unsafe event System.Action RemovableEvent
                     {
                         add { }
@@ -1928,7 +1881,18 @@ build_property.{MSBuildPropertyOptionNames.EnableUnsafeMigration} = true"));
 
                     public unsafe void PointerArray(delegate* unmanaged<int>[] callbacks) { }
 
-                    public unsafe delegate* unmanaged<int> FunctionPointerProperty => default;
+                    public void* AddedPointerMethod(void* value) => value;
+
+                    /// <safety>The pointer is not dereferenced.</safety>
+                    public void* DocumentedPointerMethod(void* value) => value;
+
+                    public delegate* unmanaged<int> AddedFunctionPointerProperty => default;
+
+                    public delegate* unmanaged<int> PointerAccessors
+                    {
+                        unsafe get => default;
+                        set { }
+                    }
                 }
                 """;
 
@@ -1946,6 +1910,12 @@ build_property.{MSBuildPropertyOptionNames.EnableUnsafeMigration} = true"));
 
                     public int RemovableProperty => 0;
 
+                    public int RemovableAccessors
+                    {
+                        get => 0;
+                        set { }
+                    }
+
                     public event System.Action RemovableEvent
                     {
                         add { }
@@ -1960,7 +1930,18 @@ build_property.{MSBuildPropertyOptionNames.EnableUnsafeMigration} = true"));
 
                     public unsafe void PointerArray(delegate* unmanaged<int>[] callbacks) { }
 
-                    public unsafe delegate* unmanaged<int> FunctionPointerProperty => default;
+                    public unsafe void* AddedPointerMethod(void* value) => value;
+
+                    /// <safety>The pointer is not dereferenced.</safety>
+                    public void* DocumentedPointerMethod(void* value) => value;
+
+                    public unsafe delegate* unmanaged<int> AddedFunctionPointerProperty => default;
+
+                    public unsafe delegate* unmanaged<int> PointerAccessors
+                    {
+                        get => default;
+                        set { }
+                    }
                 }
                 """;
 
@@ -1974,28 +1955,25 @@ build_property.{MSBuildPropertyOptionNames.EnableUnsafeMigration} = true"));
         }
 
         [Fact]
-        public async Task UnsafeUsageMigration_AddsUnsafeAndSafetyDocsToInteropDeclarations()
+        public async Task UnsafeModifierMigration_AddsUnsafeToInteropUnlessMarkedSafe()
         {
             var source = """
                 using System.Runtime.InteropServices;
 
                 public static partial class Native
                 {
-                    {|#0:public static extern int PInvoke();|}
+                    /// <safety>The native entry point has been audited.</safety>
+                    {|#0:public|} static extern int PInvoke();
 
                     [LibraryImport("Native")]
                     static partial void LibraryImport();
 
                     public static safe extern int SafeExtern();
 
-                    public static unsafe extern int UnsafeExtern();
-                }
+                    [LibraryImport("Native")]
+                    static safe partial void SafeLibraryImport();
 
-                [StructLayout(LayoutKind.Explicit)]
-                public struct ExplicitLayout
-                {
-                    [FieldOffset(0)]
-                    public int Value;
+                    public static unsafe extern int UnsafeExtern();
                 }
                 """;
 
@@ -2004,624 +1982,32 @@ build_property.{MSBuildPropertyOptionNames.EnableUnsafeMigration} = true"));
 
                 public static partial class Native
                 {
-                    /// <safety>TODO: Audit.</safety>
+                    /// <safety>The native entry point has been audited.</safety>
                     public static unsafe extern int PInvoke();
 
-                    /// <safety>TODO: Audit.</safety>
                     [LibraryImport("Native")]
                     static unsafe partial void LibraryImport();
 
-                    /// <safety>TODO: Audit.</safety>
                     public static safe extern int SafeExtern();
 
-                    /// <safety>TODO: Audit.</safety>
+                    [LibraryImport("Native")]
+                    static safe partial void SafeLibraryImport();
+
                     public static unsafe extern int UnsafeExtern();
                 }
-
-                [StructLayout(LayoutKind.Explicit)]
-                public struct ExplicitLayout
-                {
-                    /// <safety>TODO: Audit.</safety>
-                    [FieldOffset(0)]
-                    public unsafe int Value;
-                }
                 """;
 
-            await VerifyUnsafeUsageMigrationCodeFix(
+            await VerifyUnsafeModifierMigrationCodeFix(
                 source,
                 fixedSource,
                 baselineExpected: [
-                    UnsafeUsageMigrationDiagnostic().WithLocation(0),
-                    DiagnosticResult.CompilerError("CS9389").WithSpan(5, 19, 5, 25),
-                    DiagnosticResult.CompilerError("CS9392").WithSpan(19, 16, 19, 21)
-                ],
-                fixedExpected: []);
-        }
-
-        [Fact]
-        public async Task UnsafeUsageMigration_DoesNotFlagPointerValues()
-        {
-            var source = """
-                public class C
-                {
-                    public int* Field;
-
-                    public int* Identity(int* value) => value;
-
-                    public int* ReadField() => Field;
-                }
-                """;
-
-            await VerifyUnsafeUsageMigrationCodeFix(
-                source,
-                source,
-                baselineExpected: [],
-                fixedExpected: []);
-        }
-
-        [Fact]
-        public async Task UnsafeUsageMigration_PropagatesUnsafeToMatchingPartialDeclarations()
-        {
-            var source = """
-                public partial class C
-                {
-                    /// <safety>Documented.</safety>
-                    public unsafe partial void M();
-
-                    {|#0:public partial void M() { }|}
-                }
-                """;
-
-            var fixedSource = """
-                public partial class C
-                {
-                    /// <safety>Documented.</safety>
-                    public unsafe partial void M();
-
-                    public unsafe partial void M() { }
-                }
-                """;
-
-            await VerifyUnsafeUsageMigrationCodeFix(
-                source,
-                fixedSource,
-                baselineExpected: [
-                    UnsafeUsageMigrationDiagnostic().WithSpan(6, 5, 6, 32),
-                    DiagnosticResult.CompilerError("CS0764").WithSpan(6, 25, 6, 26)
-                ],
-                fixedExpected: []);
-        }
-
-        [Fact]
-        public async Task UnsafeUsageMigration_PropagatesContractsWithoutTouchingSafeImplementations()
-        {
-            var source = """
-                using System;
-
-                public class UnsafeBase
-                {
-                    /// <safety>Documented.</safety>
-                    public virtual unsafe int BaseMethod() => 0;
-                }
-
-                public class Derived : UnsafeBase
-                {
-                    {|#0:public override int BaseMethod() => 1;|}
-                }
-
-                public interface IUnsafeContract
-                {
-                    /// <safety>Documented.</safety>
-                    unsafe int M();
-                }
-
-                public class ImplicitImpl : IUnsafeContract
-                {
-                    public int M() => 1;
-                }
-
-                public class ExplicitImpl : IUnsafeContract
-                {
-                    int IUnsafeContract.M() => 2;
-                }
-
-                public interface IAccessorContract
-                {
-                    int Value
-                    {
-                        unsafe get;
-                        set;
-                    }
-                }
-
-                public class AccessorImpl : IAccessorContract
-                {
-                    public int Value
-                    {
-                        get
-                        {
-                            return 0;
-                        }
-
-                        set
-                        {
-                        }
-                    }
-                }
-
-                public interface IEventContract
-                {
-                    /// <safety>Documented.</safety>
-                    unsafe event Action E;
-                }
-
-                public class EventImpl : IEventContract
-                {
-                    public event Action E;
-                }
-
-                public interface ISafeContract
-                {
-                    void Shared();
-                }
-
-                public interface IUnsafeOnlyContract
-                {
-                    /// <safety>Documented.</safety>
-                    unsafe void Shared();
-                }
-
-                public class MixedImpl : ISafeContract, IUnsafeOnlyContract
-                {
-                    public void Shared()
-                    {
-                    }
-                }
-                """;
-
-            var fixedSource = """
-                using System;
-
-                public class UnsafeBase
-                {
-                    /// <safety>Documented.</safety>
-                    public virtual unsafe int BaseMethod() => 0;
-                }
-
-                public class Derived : UnsafeBase
-                {
-                    public override unsafe int BaseMethod() => 1;
-                }
-
-                public interface IUnsafeContract
-                {
-                    /// <safety>Documented.</safety>
-                    unsafe int M();
-                }
-
-                public class ImplicitImpl : IUnsafeContract
-                {
-                    public unsafe int M() => 1;
-                }
-
-                public class ExplicitImpl : IUnsafeContract
-                {
-                    unsafe int IUnsafeContract.M() => 2;
-                }
-
-                public interface IAccessorContract
-                {
-                    int Value
-                    {
-                        unsafe get;
-                        set;
-                    }
-                }
-
-                public class AccessorImpl : IAccessorContract
-                {
-                    public int Value
-                    {
-                        unsafe get
-                        {
-                            return 0;
-                        }
-
-                        set
-                        {
-                        }
-                    }
-                }
-
-                public interface IEventContract
-                {
-                    /// <safety>Documented.</safety>
-                    unsafe event Action E;
-                }
-
-                public class EventImpl : IEventContract
-                {
-                    public unsafe event Action E;
-                }
-
-                public interface ISafeContract
-                {
-                    void Shared();
-                }
-
-                public interface IUnsafeOnlyContract
-                {
-                    /// <safety>Documented.</safety>
-                    unsafe void Shared();
-                }
-
-                public class MixedImpl : ISafeContract, IUnsafeOnlyContract
-                {
-                    public void Shared()
-                    {
-                    }
-                }
-                """;
-
-            await VerifyUnsafeUsageMigrationCodeFix(
-                source,
-                fixedSource,
-                baselineExpected: [
-                    UnsafeUsageMigrationDiagnostic().WithLocation(0)
-                ],
-                fixedExpected: []);
-        }
-
-        [Fact]
-        public async Task UnsafeUsageMigration_UsesUnsafeExpressionsForScopeSensitiveSites()
-        {
-            var source = """
-                using System;
-                using System.IO;
-                using System.Threading.Tasks;
-
-                public interface IValueProvider
-                {
-                    /// <safety>Documented.</safety>
-                    unsafe int Value();
-                }
-
-                public sealed class ValueProvider : IValueProvider
-                {
-                    {|#0:public int Value() => 1;|}
-                }
-
-                public interface IResourceProvider
-                {
-                    /// <safety>Documented.</safety>
-                    unsafe IDisposable Open();
-                }
-
-                public sealed class ResourceProvider : IResourceProvider
-                {
-                    public IDisposable Open() => new MemoryStream();
-                }
-
-                public class C
-                {
-                    private readonly int _field = new ValueProvider(/* keep */).Value();
-
-                    public C() : this(new ValueProvider().Value())
-                    {
-                    }
-
-                    public C(int value)
-                    {
-                    }
-
-                    public async Task<int> AwaitAsync()
-                        => await Task.FromResult(new ValueProvider().Value());
-
-                    public int CatchFilter()
-                    {
-                        try
-                        {
-                            throw new Exception();
-                        }
-                        catch (Exception) when (new ValueProvider().Value() > 0)
-                        {
-                            return 1;
-                        }
-                    }
-
-                    public int UsingDeclaration()
-                    {
-                        using var resource = new ResourceProvider().Open();
-                        return 1;
-                    }
-                }
-                """;
-
-            var fixedSource = """
-                using System;
-                using System.IO;
-                using System.Threading.Tasks;
-
-                public interface IValueProvider
-                {
-                    /// <safety>Documented.</safety>
-                    unsafe int Value();
-                }
-
-                public sealed class ValueProvider : IValueProvider
-                {
-                    public unsafe int Value() => 1;
-                }
-
-                public interface IResourceProvider
-                {
-                    /// <safety>Documented.</safety>
-                    unsafe IDisposable Open();
-                }
-
-                public sealed class ResourceProvider : IResourceProvider
-                {
-                    public unsafe IDisposable Open() => new MemoryStream();
-                }
-
-                public class C
-                {
-                    private readonly int _field = unsafe(/* SAFETY: Audit */new ValueProvider(/* keep */).Value());
-
-                    public C() : this(unsafe(/* SAFETY: Audit */new ValueProvider().Value()))
-                    {
-                    }
-
-                    public C(int value)
-                    {
-                    }
-
-                    public async Task<int> AwaitAsync()
-                        => await Task.FromResult(unsafe(/* SAFETY: Audit */new ValueProvider().Value()));
-
-                    public int CatchFilter()
-                    {
-                        try
-                        {
-                            throw new Exception();
-                        }
-                        catch (Exception) when (unsafe(/* SAFETY: Audit */new ValueProvider().Value()) > 0)
-                        {
-                            return 1;
-                        }
-                    }
-
-                    public int UsingDeclaration()
-                    {
-                        using var resource = unsafe(/* SAFETY: Audit */new ResourceProvider().Open());
-                        return 1;
-                    }
-                }
-                """;
-
-            await VerifyUnsafeUsageMigrationCodeFix(
-                source,
-                fixedSource,
-                baselineExpected: [
-                    UnsafeUsageMigrationDiagnostic().WithLocation(0)
-                ],
-                fixedExpected: []);
-        }
-
-        [Fact]
-        public async Task UnsafeUsageMigration_SkipsUnsafeExpressionsContainingAwait()
-        {
-            var source = """
-                using System.Threading.Tasks;
-
-                public class C
-                {
-                    /// <safety>Documented.</safety>
-                    private static unsafe int Unsafe(int value) => value;
-
-                    /// <safety>Documented.</safety>
-                    private static unsafe int Unsafe2() => 2;
-
-                    public static async Task<int> M()
-                    {
-                        int first = {|#0:Unsafe(await Task.FromResult(1))|};
-                        int second = {|#1:Unsafe2()|};
-                        return first + second;
-                    }
-                }
-                """;
-
-            var fixedSource = """
-                using System.Threading.Tasks;
-
-                public class C
-                {
-                    /// <safety>Documented.</safety>
-                    private static unsafe int Unsafe(int value) => value;
-
-                    /// <safety>Documented.</safety>
-                    private static unsafe int Unsafe2() => 2;
-
-                    public static async Task<int> M()
-                    {
-                        int first = {|#0:Unsafe(await Task.FromResult(1))|};
-                        int second = unsafe(/* SAFETY: Audit */Unsafe2());
-                        return first + second;
-                    }
-                }
-                """;
-
-            await VerifyUnsafeUsageMigrationCodeFix(
-                source,
-                fixedSource,
-                baselineExpected: [
-                    UnsafeUsageMigrationDiagnostic().WithLocation(0),
-                    DiagnosticResult.CompilerError(RequiresUnsafeCodeFixProvider.UnsafeMemberOperationDiagnosticId)
-                        .WithLocation(0)
-                        .WithArguments("C.Unsafe(int)"),
-                    DiagnosticResult.CompilerError(RequiresUnsafeCodeFixProvider.UnsafeMemberOperationDiagnosticId)
-                        .WithLocation(1)
-                        .WithArguments("C.Unsafe2()")
+                    UnsafeModifierMigrationDiagnostic().WithLocation(0),
+                    DiagnosticResult.CompilerError("CS9389").WithSpan(6, 19, 6, 25),
+                    DiagnosticResult.CompilerError("CS9388").WithSpan(14, 12, 14, 16)
                 ],
                 fixedExpected: [
-                    UnsafeUsageMigrationDiagnostic().WithLocation(0),
-                    DiagnosticResult.CompilerError(RequiresUnsafeCodeFixProvider.UnsafeMemberOperationDiagnosticId)
-                        .WithLocation(0)
-                        .WithArguments("C.Unsafe(int)")
-                ],
-                numberOfIterations: 2);
-        }
-
-        [Fact]
-        public async Task UnsafeUsageMigration_UsesUnsafeExpressionForRefLikeLocal()
-        {
-            var source = """
-                using System;
-                using System.Runtime.CompilerServices;
-
-                public class C
-                {
-                    [SkipLocalsInit]
-                    public int Sum()
-                    {
-                        Span<int> span = {|#0:stackalloc int[4]|};
-                        return span.Length;
-                    }
-                }
-                """;
-
-            var fixedSource = """
-                using System;
-                using System.Runtime.CompilerServices;
-
-                public class C
-                {
-                    [SkipLocalsInit]
-                    public int Sum()
-                    {
-                        Span<int> span = unsafe(/* SAFETY: Audit */stackalloc int[4]);
-                        return span.Length;
-                    }
-                }
-                """;
-
-            await VerifyUnsafeUsageMigrationCodeFix(
-                source,
-                fixedSource,
-                baselineExpected: [
-                    UnsafeUsageMigrationDiagnostic().WithLocation(0),
-                    DiagnosticResult.CompilerError("CS9361").WithLocation(0)
-                ],
-                fixedExpected: []);
-        }
-
-        [Fact]
-        public async Task UnsafeUsageMigration_PreservesCommentsInLocalInitializer()
-        {
-            var source = """
-                using System;
-                using System.Runtime.CompilerServices;
-
-                public class C
-                {
-                    [SkipLocalsInit]
-                    public int Sum()
-                    {
-                        Span<int> span = {|#0:stackalloc int[4 /* keep */]|};
-                        return span.Length;
-                    }
-                }
-                """;
-
-            var fixedSource = """
-                using System;
-                using System.Runtime.CompilerServices;
-
-                public class C
-                {
-                    [SkipLocalsInit]
-                    public int Sum()
-                    {
-                        Span<int> span = unsafe(/* SAFETY: Audit */stackalloc int[4 /* keep */]);
-                        return span.Length;
-                    }
-                }
-                """;
-
-            await VerifyUnsafeUsageMigrationCodeFix(
-                source,
-                fixedSource,
-                baselineExpected: [
-                    UnsafeUsageMigrationDiagnostic().WithLocation(0),
-                    DiagnosticResult.CompilerError("CS9361").WithLocation(0)
-                ],
-                fixedExpected: []);
-        }
-
-        [Fact]
-        public async Task UnsafeUsageMigration_WrapsWholeBodiesForMultipleSafeSites()
-        {
-            var source = """
-                using System;
-
-                public interface ICounter
-                {
-                    /// <safety>Documented.</safety>
-                    unsafe int Next();
-                }
-
-                public sealed class Counter : ICounter
-                {
-                    {|#0:public int Next() => 1;|}
-                }
-
-                public class C
-                {
-                    public int WrapWholeBody()
-                    {
-                        int Local() => new Counter().Next();
-                        Func<int> lambda = () => new Counter().Next();
-                        return new Counter().Next() + Local() + lambda();
-                    }
-                }
-                """;
-
-            var fixedSource = """
-                using System;
-
-                public interface ICounter
-                {
-                    /// <safety>Documented.</safety>
-                    unsafe int Next();
-                }
-
-                public sealed class Counter : ICounter
-                {
-                    public unsafe int Next() => 1;
-                }
-
-                public class C
-                {
-                    public int WrapWholeBody()
-                    {
-                        unsafe
-                        {
-                            // SAFETY: Audit
-                            int Local() => new Counter().Next();
-                            Func<int> lambda = () => new Counter().Next();
-                            return new Counter().Next() + Local() + lambda();
-                        }
-                    }
-                }
-                """;
-
-            await VerifyUnsafeUsageMigrationCodeFix(
-                source,
-                fixedSource,
-                baselineExpected: [
-                    UnsafeUsageMigrationDiagnostic().WithLocation(0)
-                ],
-                fixedExpected: []);
+                    DiagnosticResult.CompilerError("CS9388").WithSpan(14, 12, 14, 16)
+                ]);
         }
     }
 }

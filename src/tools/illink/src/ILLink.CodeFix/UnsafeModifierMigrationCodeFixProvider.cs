@@ -2,6 +2,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 #if DEBUG
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Composition;
@@ -34,21 +35,21 @@ public sealed class UnsafeModifierMigrationCodeFixProvider : RoslynCodeFixProvid
 
     public override Task RegisterCodeFixesAsync(CodeFixContext context)
     {
-        if (!UnsafeCodeFixHelpers.IsMigrationEnabled(context.Document))
+        if (!IsMigrationEnabled(context.Document))
             return Task.CompletedTask;
 
         string title = CodeFixTitle.ToString();
         context.RegisterCodeFix(
             CodeAction.Create(
                 title,
-                cancellationToken => RemoveUnsafeModifiersAsync(context.Document, cancellationToken),
+                cancellationToken => NormalizeUnsafeModifiersAsync(context.Document, cancellationToken),
                 title),
             context.Diagnostics);
 
         return Task.CompletedTask;
     }
 
-    private static async Task<Document> RemoveUnsafeModifiersAsync(
+    private static async Task<Document> NormalizeUnsafeModifiersAsync(
         Document document,
         CancellationToken cancellationToken)
     {
@@ -58,32 +59,29 @@ public sealed class UnsafeModifierMigrationCodeFixProvider : RoslynCodeFixProvid
             return document;
         }
 
-        ImmutableArray<UnsafeMigrationAnalysis.ModifierRemoval> removals =
-            UnsafeMigrationAnalysis.GetModifierRemovals(semanticModel, cancellationToken);
-        if (removals.IsEmpty)
+        ImmutableArray<UnsafeMigrationAnalysis.ModifierUpdate> updates =
+            UnsafeMigrationAnalysis.GetModifierUpdates(semanticModel, cancellationToken);
+        if (updates.IsEmpty)
             return document;
 
-        Dictionary<SyntaxNode, SyntaxAnnotation> annotations = removals.ToDictionary(
-            static removal => removal.Declaration,
-            static _ => new SyntaxAnnotation());
-
-        SyntaxNode changedRoot = root.ReplaceNodes(
-            annotations.Keys,
-            (original, rewritten) => rewritten.WithAdditionalAnnotations(annotations[original]));
-
+        Dictionary<SyntaxNode, bool> updateMap = updates.ToDictionary(
+            static update => update.Declaration,
+            static update => update.ShouldHaveUnsafeModifier);
         SyntaxGenerator generator = SyntaxGenerator.GetGenerator(document);
-        foreach (SyntaxAnnotation annotation in annotations.Values)
-        {
-            SyntaxNode declaration = changedRoot.GetAnnotatedNodes(annotation).Single();
-            SyntaxNode replacement = generator.WithModifiers(
-                declaration,
-                generator.GetModifiers(declaration).WithIsUnsafe(false))
-                .WithLeadingTrivia(declaration.GetLeadingTrivia());
-
-            changedRoot = changedRoot.ReplaceNode(declaration, replacement);
-        }
+        SyntaxNode changedRoot = root.ReplaceNodes(
+            updateMap.Keys,
+            (original, rewritten) => generator.WithModifiers(
+                    rewritten,
+                    generator.GetModifiers(rewritten).WithIsUnsafe(updateMap[original]))
+                .WithLeadingTrivia(rewritten.GetLeadingTrivia()));
 
         return document.WithSyntaxRoot(changedRoot);
     }
+
+    private static bool IsMigrationEnabled(Document document)
+        => document.Project.AnalyzerOptions.AnalyzerConfigOptionsProvider.GlobalOptions.TryGetValue(
+            $"build_property.{MSBuildPropertyOptionNames.EnableUnsafeMigration}",
+            out string? value) &&
+            string.Equals(value?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
 }
 #endif
